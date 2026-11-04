@@ -19,7 +19,20 @@ test('plainText：去标签、还原实体、压缩空白', () => {
   assert.equal(plainText('<p>  多   空白 </p>'), '多 空白')
 })
 
+test('plainText：不把公式里的 < 当标签', () => {
+  assert.equal(plainText('<p>$x<0$ 且 $a<b$</p>'), '$x<0$ 且 $a<b$')
+})
+
 test('balanceTags：补齐截断留下的未闭合标签', () => {
   assert.equal(balanceTags('<p><strong>题干'), '<p><strong>题干</strong></p>')
   assert.equal(balanceTags('<p>完整</p>'), '<p>完整</p>')
+})
+
+test('围栏和前后语在任意位置都被清掉', () => {
+  const src = '以下是整理后的内容：\n```html\n<p>hi</p>\n```\n希望对你有帮助'
+  assert.equal(cleanAiHtml(src), '<p>hi</p>')
+})
+
+test('围栏行即使不在首尾也删除', () => {
+  assert.equal(cleanAiHtml('<p>a</p>\n```\n<p>b</p>\n```'), '<p>a</p>\n\n<p>b</p>')
 })

@@ -45,3 +45,44 @@ test('extractMath 抽出全部公式并区分 display', () => {
     { content: 'b=2', display: true }
   ])
 })
+
+test('命令后紧跟字母时补空格，避免非法控制序列', () => {
+  assert.equal(normalizeAiMathHtml('$∠A=30°$').html, '$\\angle A=30^\\circ$')
+  assert.equal(normalizeAiMathHtml('$αx$').html, '$\\alpha x$')
+  assert.equal(normalizeAiMathHtml('$∈A$').html, '$\\in A$')
+  assert.equal(normalizeAiMathHtml('$≥x$').html, '$\\ge x$')
+  assert.equal(normalizeAiMathHtml('$△ABC$').html, '$\\triangle ABC$')
+  assert.equal(normalizeAiMathHtml('$←x$').html, '$\\leftarrow x$')
+  assert.equal(normalizeAiMathHtml('$⊆y$').html, '$\\subseteq y$')
+})
+
+test('补充符号表：≡ ∅ ∀ ∃ ⊙ 与下标', () => {
+  assert.equal(normalizeAiMathHtml('$a≡b$').html, '$a\\equiv b$')
+  assert.equal(normalizeAiMathHtml('$∅$').html, '$\\varnothing$')
+  assert.equal(normalizeAiMathHtml('$∀x$').html, '$\\forall x$')
+  assert.equal(normalizeAiMathHtml('$a₁$').html, '$a_{1}$')
+  assert.equal(normalizeAiMathHtml('$a≦b$').html, '$a\\le b$')
+  assert.equal(normalizeAiMathHtml('$□ABCD$').html, '$\\square ABCD$')
+})
+
+test('根号按合理边界转换，不吞掉后面的变量', () => {
+  assert.equal(normalizeAiMathHtml('$√2x$').html, '$\\sqrt{2}x$')
+  assert.equal(normalizeAiMathHtml('$√12$').html, '$\\sqrt{12}$')
+  assert.equal(normalizeAiMathHtml('$√ab$').html, '$\\sqrt{ab}$')
+  assert.equal(normalizeAiMathHtml('$√(x+1)$').html, '$\\sqrt{x+1}$')
+})
+
+test('含 < 的不等式仍被识别与归一', () => {
+  assert.equal(normalizeAiMathHtml('$x<0$ 且 $y²>0$').html, '$x<0$ 且 $y^2>0$')
+  assert.deepEqual(extractMath('$x<0$'), [{ content: 'x<0', display: false }])
+})
+
+test('公式里的 &lt; / &gt; 还原成 KaTeX 能识别的符号', () => {
+  assert.equal(normalizeAiMathHtml('$x &lt; 0$').html, '$x < 0$')
+  assert.equal(normalizeAiMathHtml('$x &gt; 0$').html, '$x > 0$')
+})
+
+test('不把跨 HTML 标签的 $...$ 当公式', () => {
+  const src = '<p>价格 $5</p><p>另付 $10</p>'
+  assert.equal(normalizeAiMathHtml(src).html, src)
+})

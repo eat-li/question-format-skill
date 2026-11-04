@@ -69,3 +69,14 @@ test('formatQuestion：模型回空内容时抛 EMPTY_RESULT', async () => {
     (e) => e.code === 'EMPTY_RESULT'
   )
 })
+
+test('postProcess：报告删除的答案与清理的围栏', () => {
+  const r = postProcess(
+    '以下是整理后的内容：\n```html\n<p>求 $x$。</p><p>故答案为 4</p>\n```',
+    '求 x。',
+    'stem'
+  )
+  assert.equal(r.html, '<p>求 $x$。</p>')
+  assert.equal(r.removedAnswer, true)
+  assert.equal(r.dropped, false)
+})

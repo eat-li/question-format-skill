@@ -1,9 +1,17 @@
 {
   "name": "question-format-skill",
-  "version": "1.0.0",
-  "description": "把题目文本整理成规范 HTML 的 Agent Skill：KaTeX 公式归一、防泄题兜底、本地公式修复",
+  "version": "1.1.0",
+  "description": "把题目文本整理成规范 HTML 的 Agent Skill：KaTeX 公式归一、防泄题兜底、数字/选项守恒守卫",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eat-li/question-format-skill.git"
+  },
+  "bugs": {
+    "url": "https://github.com/eat-li/question-format-skill/issues"
+  },
+  "homepage": "https://github.com/eat-li/question-format-skill#readme",
   "engines": {
     "node": ">=18.13"
   },
@@ -14,7 +22,8 @@
     ".": "./src/index.mjs",
     "./clean": "./src/clean.mjs",
     "./strip-answer": "./src/strip-answer.mjs",
-    "./normalize-math": "./src/normalize-math.mjs"
+    "./normalize-math": "./src/normalize-math.mjs",
+    "./guard": "./src/guard.mjs"
   },
   "files": [
     "bin",
@@ -27,7 +36,8 @@
     "test": "node --test",
     "format": "node bin/qformat.mjs format",
     "repair": "node bin/qformat.mjs repair",
-    "verify": "node bin/qformat.mjs verify"
+    "verify": "node bin/qformat.mjs verify",
+    "guard": "node bin/qformat.mjs guard"
   },
   "optionalDependencies": {
     "katex": "^0.16.11"

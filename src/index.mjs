@@ -1,13 +1,14 @@
 // 对外主入口：一次调用完成「排版 → 清洗 → 防泄题 → 公式规范化」。
 import { cleanAiHtml } from './clean.mjs'
-import { stripUnrequestedAnswer } from './strip-answer.mjs'
+import { stripUnrequestedAnswerDetailed } from './strip-answer.mjs'
 import { normalizeAiMathHtml } from './normalize-math.mjs'
 import { loadSystemPrompt } from './prompt.mjs'
 import { callChat, resolveTarget } from './client.mjs'
 
 export { plainText, cleanAiHtml, balanceTags } from './clean.mjs'
-export { stripUnrequestedAnswer } from './strip-answer.mjs'
-export { normalizeAiMathHtml, extractMath, UNICODE_MATH } from './normalize-math.mjs'
+export { stripUnrequestedAnswer, stripUnrequestedAnswerDetailed } from './strip-answer.mjs'
+export { normalizeAiMathHtml, extractMath, scanMath, UNICODE_MATH } from './normalize-math.mjs'
+export { guardHtml, collectNumbers, collectOptions } from './guard.mjs'
 export { validateAiMath } from './validate-math.mjs'
 export { callChat, resolveTarget, DEFAULT_BASE_URL, DEFAULT_MODEL } from './client.mjs'
 export { loadSystemPrompt } from './prompt.mjs'
@@ -23,11 +24,13 @@ export { loadSystemPrompt } from './prompt.mjs'
  */
 export function postProcess(raw, sourceText, field = 'auto') {
   const cleaned = cleanAiHtml(raw)
-  if (!cleaned) return { html: '', dropped: false, changed: false }
-  const kept = stripUnrequestedAnswer(sourceText, cleaned, field)
-  if (!kept) return { html: '', dropped: true, changed: false }
-  const { html, changed } = normalizeAiMathHtml(kept)
-  return { html, dropped: false, changed }
+  if (!cleaned) return { html: '', dropped: false, changed: false, removedAnswer: false }
+  const stripped = stripUnrequestedAnswerDetailed(sourceText, cleaned, field)
+  if (!stripped.html) {
+    return { html: '', dropped: true, changed: false, removedAnswer: stripped.removed }
+  }
+  const { html, changed } = normalizeAiMathHtml(stripped.html)
+  return { html, dropped: false, changed, removedAnswer: stripped.removed }
 }
 
 /**
@@ -41,7 +44,7 @@ export function postProcess(raw, sourceText, field = 'auto') {
  * @param {number} [opts.temperature]
  * @param {number} [opts.timeoutMs]
  * @param {Function} [opts.call] 注入的调用函数（测试用）
- * @returns {Promise<{ html: string, dropped: boolean, changed: boolean }>}
+ * @returns {Promise<{ html: string, dropped: boolean, changed: boolean, removedAnswer: boolean }>}
  */
 export async function formatQuestion({
   text,

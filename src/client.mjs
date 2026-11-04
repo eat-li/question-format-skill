@@ -28,7 +28,8 @@ export function resolveTarget({ apiKey, baseUrl, model } = {}) {
   if (!base) {
     return { error: `接口地址无效：${baseUrl || process.env.AI_BASE_URL || DEFAULT_BASE_URL}` }
   }
-  return { key, base, model: String(model || process.env.AI_MODEL || DEFAULT_MODEL).trim() }
+  const resolvedModel = String(model || process.env.AI_MODEL || DEFAULT_MODEL).trim() || DEFAULT_MODEL
+  return { key, base, model: resolvedModel }
 }
 
 /**
@@ -46,32 +47,53 @@ export async function callChat({
 }) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
-  let resp
   try {
-    resp = await fetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens }),
-      signal: controller.signal
-    })
+    let resp
+    try {
+      resp = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens }),
+        signal: controller.signal
+      })
+    } catch (e) {
+      const err = new Error(
+        controller.signal.aborted
+          ? `请求超时（${timeoutMs}ms）：可调大 --timeout，或换 --model`
+          : `网络请求失败：${e.message}`
+      )
+      err.code = controller.signal.aborted ? 'TIMEOUT' : 'NETWORK_ERROR'
+      throw err
+    }
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '')
+      let msg = `上游返回 HTTP ${resp.status}`
+      try {
+        const j = JSON.parse(errText)
+        if (j?.error?.message) msg = j.error.message
+      } catch {
+        if (errText) msg = errText.slice(0, 300)
+      }
+      const err = new Error(msg)
+      err.httpStatus = resp.status
+      throw err
+    }
+
+    let data
+    try {
+      data = await resp.json()
+    } catch {
+      const err = new Error(
+        controller.signal.aborted
+          ? `请求超时（${timeoutMs}ms）：可调大 --timeout，或换 --model`
+          : '上游返回的不是合法 JSON'
+      )
+      err.code = controller.signal.aborted ? 'TIMEOUT' : 'BAD_RESPONSE'
+      throw err
+    }
+    return String(data?.choices?.[0]?.message?.content || '')
   } finally {
     clearTimeout(timer)
   }
-
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => '')
-    let msg = `上游返回 HTTP ${resp.status}`
-    try {
-      const j = JSON.parse(errText)
-      if (j?.error?.message) msg = j.error.message
-    } catch {
-      if (errText) msg = errText.slice(0, 300)
-    }
-    const err = new Error(msg)
-    err.httpStatus = resp.status
-    throw err
-  }
-
-  const data = await resp.json()
-  return String(data?.choices?.[0]?.message?.content || '')
 }

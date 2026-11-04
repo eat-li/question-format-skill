@@ -8,11 +8,12 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
+        os: [ubuntu-latest, windows-latest]
+        node-version: [18, 20, 22]
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +28,11 @@ jobs:
         run: npm test
 
       - name: CLI smoke test
+        shell: bash
         run: |
           printf '' | node bin/qformat.mjs repair -
           node bin/qformat.mjs --version
           node bin/qformat.mjs --help > /dev/null
+          printf '<p>求 $f(2)$。</p><p>答案：4</p>' > guard-smoke.html
+          node bin/qformat.mjs guard guard-smoke.html --source-text '求 f(2)。' --field stem
+          rm guard-smoke.html
