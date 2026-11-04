@@ -1,0 +1,46 @@
+{
+  "name": "question-format-skill",
+  "version": "1.0.0",
+  "description": "把题目文本整理成规范 HTML 的 Agent Skill：KaTeX 公式归一、防泄题兜底、本地公式修复",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.13"
+  },
+  "bin": {
+    "qformat": "bin/qformat.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./clean": "./src/clean.mjs",
+    "./strip-answer": "./src/strip-answer.mjs",
+    "./normalize-math": "./src/normalize-math.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "references",
+    "SKILL.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "format": "node bin/qformat.mjs format",
+    "repair": "node bin/qformat.mjs repair",
+    "verify": "node bin/qformat.mjs verify"
+  },
+  "optionalDependencies": {
+    "katex": "^0.16.11"
+  },
+  "keywords": [
+    "ai",
+    "skill",
+    "claude-skill",
+    "math",
+    "latex",
+    "katex",
+    "question-bank",
+    "formatting",
+    "llm"
+  ]
+}

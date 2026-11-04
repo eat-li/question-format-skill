@@ -1,0 +1,7 @@
+# 统一按 LF 存储：Windows 上检出为 CRLF，仓库内始终是 LF，
+# 避免 CI（ubuntu）与本地（Windows）因行尾差异产生无意义 diff。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.woff2 binary
