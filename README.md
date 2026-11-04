@@ -23,6 +23,7 @@
 | 选项用 `<br>` 串成一行 | 无法按选项切分、分页测量 | 规范为每选项一个 `<p>` |
 | 输出带 ```` ```html ```` 围栏或 `<html>` 外壳 | 落库后页面结构被污染 | 清洗链第一道就去掉 |
 | 模型改了数字、漏抄条件、凭空加选项 | 比排版不整齐严重得多 | `guard` 做数字/选项守恒校验 |
+| 输出带 `<script>` / `onerror` / `javascript:` | 预览页 XSS | `guard` 检测，`sanitize` 白名单清除 |
 
 前两条是关键：**能靠规则的绝不交给模型，能确定性验证的绝不靠肉眼**。`guard` 把后半句落到了数字与选项上。
 
@@ -37,7 +38,7 @@ npm install        # 只为 verify 命令装 katex；不用 verify 可跳过
 要求 Node.js ≥ 18.13（依赖内置 `fetch`）。运行时**零第三方依赖**。
 `.env` 放在当前工作目录或 skill 根目录都可以；CLI 先读 cwd，再读 skill 根目录，不覆盖已有环境变量。
 
-## 四种用法
+## 五种用法
 
 ### 1. 作为 Agent Skill
 
@@ -59,8 +60,13 @@ echo '已知f(x)=x²-2x+3，求f(2)的值。' | node bin/qformat.mjs format - --
 批量：
 
 ```bash
-node bin/qformat.mjs format items.json --batch --out result.json --concurrency 3
+node bin/qformat.mjs format items.json --batch --out result.json --concurrency 3 --resume
 ```
+
+批量默认启用结果缓存（`.qformat-cache/`），同一段文本 + 字段 + 模型 + 提示词不会重复计费；
+用 `--no-cache` 关闭，或用 `--cache-dir <目录>` 改位置。`--resume` 会读取上次的
+`result.json` / `result.json.partial`，按 `id + 输入哈希` 跳过 `ok:true` 且内容未变的项，只重跑失败或改动项；
+运行中每完成一项就写一次 `.partial`，进程中断也不会丢整批。
 
 `items.json`：
 
@@ -71,7 +77,8 @@ node bin/qformat.mjs format items.json --batch --out result.json --concurrency 3
 ]
 ```
 
-输出 `[{ id, ok, html, changed, removedAnswer }]`，单项失败不中断整批；429/5xx 退避重试两次。
+输出 `[{ id, ok, html, changed, removedAnswer, cached, resumed, inputHash }]`，单项失败不中断整批；429/5xx 退避重试两次。
+`--max-tokens` 控制单次回复上限（默认 4096），长答案/解析可以调大。
 
 ### 3. 命令行：本地公式修复（不联网）
 
@@ -100,6 +107,18 @@ node bin/qformat.mjs guard 整理后.html --source-text '已知f(x)=x²，求f(2
 `--source` 必须是这段输出对应的完整原文（题干 + 选项）；如果选项/数字来自另一个字段，
 守恒校验会把它们当成「新增」，此时只对同一字段跑，或人工确认。
 
+### 5. 命令行：HTML 消毒（不联网）
+
+```bash
+node bin/qformat.mjs sanitize 整理后.html --out 安全.html
+# 也可以让 guard 一并消毒：
+node bin/qformat.mjs guard 整理后.html --source 原文.txt --sanitize
+```
+
+`sanitize` 只保留 `format-spec.md` 允许的标签，删除 `script/style/iframe` 等危险标签，
+去掉 `on*`、内联 `style`、`javascript:` 链接；图片只保留 `src`（http/https/相对路径/位图 data URL）、
+`alt`、`width`、`height`。
+
 ## 命令参考
 
 | 命令 | 作用 | 需要网络 |
@@ -109,9 +128,11 @@ node bin/qformat.mjs guard 整理后.html --source-text '已知f(x)=x²，求f(2
 | `repair <输入>` | Unicode → LaTeX、定界符归一 | 否 |
 | `verify <输入>` | KaTeX 校验，输出失败公式清单 | 否 |
 | `guard <输入> --source <原文>` | 清洗 + 防泄题 + 归一 + 守恒校验 | 否 |
+| `sanitize <输入>` | HTML 白名单消毒（去脚本/事件属性） | 否 |
 
-`<输入>` 为文件路径，`-` 表示 stdin。常用参数：`--field`、`--source`、`--source-text`、`--out`、`--json`、
-`--concurrency`、`--api-key`、`--base-url`、`--model`、`--timeout`。完整见 `node bin/qformat.mjs --help`。
+`<输入>` 为文件路径，`-` 表示 stdin。常用参数：`--field`、`--source`、`--source-text`、`--sanitize`、
+`--out`、`--json`、`--concurrency`、`--resume`、`--no-cache`、`--cache-dir`、`--max-tokens`、
+`--api-key`、`--base-url`、`--model`、`--timeout`。完整见 `node bin/qformat.mjs --help`。
 
 ## 作为库调用
 
@@ -120,7 +141,8 @@ import {
   formatQuestion,
   normalizeAiMathHtml,
   stripUnrequestedAnswer,
-  guardHtml
+  guardHtml,
+  sanitizeHtml
 } from './src/index.mjs'
 
 const { html, dropped } = await formatQuestion({
@@ -134,10 +156,14 @@ const { html: fixed, changed } = normalizeAiMathHtml(html)
 // Agent 自己排版后，用同一套规则守一遍
 const result = guardHtml({ sourceText: '已知f(x)=x²，求f(2)。', html: fixed, field: 'stem' })
 if (!result.ok) console.log(result.errors)
+
+const safe = sanitizeHtml(html)
 ```
 
 `postProcess(raw, sourceText, field)` 可单独复用——你已经有了自己的模型调用，只想借用后处理链。
 `stripUnrequestedAnswerDetailed` 会额外返回 `removed`，便于宿主记录「本次删掉了补写的答案」。
+`buildSystemPrompt(field)` 会把字段规则追加到基础提示词；`formatCacheKey` / `readCache` / `writeCache`
+可用于自己的批量管线。
 
 ## 设计取舍
 
@@ -155,9 +181,15 @@ if (!result.ok) console.log(result.errors)
   「哪一段算公式」需要语义理解，规则做不到，硬猜会切碎题干。这条已写进
   `references/format-spec.md` 的已知边界。
 - **数字与选项也要守恒**。`guard` 对比原文和输出的数字集合、选项字母；改数字、漏抄条件、
-  凭空补选项都会报错。它不判断语义是否正确，只守住「排版不是改题」这条线。
-- **提示词与代码分离**。`references/prompt.md` 是唯一事实来源，CLI 运行时读取它，
-  改提示词不用动代码，也不会出现「文档写一套、实际发另一套」。
+  凭空补选项、丢掉选项都会报错。它不判断语义是否正确，只守住「排版不是改题」这条线。
+- **字段身份也告诉模型**。基础提示词之外，`buildSystemPrompt(field)` 会追加「本次是题干/答案」，
+  减少模型在题干里补答案；后处理截断仍是最后一道确定性防线。
+- **缓存键覆盖提示词**。缓存包含文本、字段、模型、温度、maxTokens 和系统提示词哈希；
+  改提示词或换模型会自动失效，`--no-cache` 可强制重新生成。
+- **消毒只做白名单**。`sanitize` 不是完整浏览器级 sanitizer，但覆盖 `script/style/iframe`、
+  `on*`、`javascript:`、内联 `style` 和图片危险 URL；未知标签拆掉保文字。
+- **提示词与代码分离**。`references/prompt.md` 是基础提示词，CLI 运行时读取它；字段规则由
+  `buildSystemPrompt(field)` 追加。改基础提示词不用动代码，也不会出现「文档写一套、实际发另一套」。
 
 ## 改造为其它学科
 
@@ -168,18 +200,20 @@ if (!result.ok) console.log(result.errors)
 ## 测试
 
 ```bash
-npm test     # node --test，68 条用例，零网络依赖
+npm test     # node --test，89 条用例，零网络依赖
 ```
 
 覆盖：围栏/外壳清洗、定界符归一、Unicode 转 LaTeX 与命令边界、含 `<` 的不等式、
 防泄题的多种边界（故答案为 / 正确答案 / 故选 / 无冒号 / 逗号后 / 解析式误判）、
-数字与选项守恒、危险标签、CLI 的 repair / guard 冒烟。CI 见 `.github/workflows/ci.yml`
+数字与选项守恒（含丢失选项）、HTML 消毒、缓存键与读写、字段提示、CLI 的
+repair / guard / sanitize / 批量缓存 / 断点续跑冒烟。CI 见 `.github/workflows/ci.yml`
 （Node 18/20/22 × Ubuntu/Windows）。
 
 ## 安全边界
 
-`guard` 会拒绝 `script` / `on*` / `javascript:` / 内联 `style`，但它不是完整的 HTML 消毒器。
-输出落库或渲染前，宿主仍应跑一遍白名单 sanitizer——尤其是题干来自不可信来源时。
+`qformat sanitize` 提供白名单消毒，`guard --sanitize` 可以检查 + 消毒一次完成，覆盖常见 XSS 入口。
+它不是浏览器级 sanitizer：如果宿主还允许 `class`、`data-*`、外链样式或 MathML，需要在宿主侧再跑一遍
+自己的策略。题干来自不可信来源时，至少要在落库/渲染前跑一次 `sanitize`。
 
 ## 目录结构
 
@@ -190,17 +224,19 @@ references/
   format-spec.md            输出契约 + LaTeX 对照表 + 示例 + 已知边界
   answer-leak.md            防泄题的设计说明
 src/
-  index.mjs                 统一出口：formatQuestion / postProcess / guardHtml
+  index.mjs                 统一出口：formatQuestion / postProcess / guardHtml / sanitizeHtml
   clean.mjs                 清洗：去围栏、去外壳、定界符归一、标签配平
   strip-answer.mjs          防泄题截断（含详细接口）
   normalize-math.mjs        Unicode → LaTeX、公式扫描
   guard.mjs                 离线守卫：守恒校验与危险标签检查
+  sanitize.mjs              HTML 白名单消毒
+  cache.mjs                 结果缓存（键含提示词哈希）
   validate-math.mjs         KaTeX 校验（可选依赖）
   client.mjs                OpenAI 兼容调用层
-  prompt.mjs               提示词加载
+  prompt.mjs               提示词加载 + 字段规则
   env.mjs                   极简 .env 读取
 bin/qformat.mjs             CLI
-test/                       68 条用例（含 CLI 冒烟）
+test/                       89 条用例（含 CLI 与批量缓存/续跑冒烟）
 ```
 
 ## License

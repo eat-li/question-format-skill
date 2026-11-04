@@ -6,6 +6,8 @@ node_modules/
 out/
 *.log
 dist/
+.qformat-cache/
+*.partial
 
 # 编辑器 / 系统
 .DS_Store

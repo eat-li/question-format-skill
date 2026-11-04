@@ -8,15 +8,24 @@
 //   qformat guard <file|-> --source <原文> [--field stem] [--out f.html] [--json]
 //
 // 输入为 `-` 时读 stdin。format 需要 AI_API_KEY（.env 或环境变量）。
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadDotEnv } from '../src/env.mjs'
 import {
   formatQuestion,
+  cleanAiHtml,
   normalizeAiMathHtml,
   validateAiMath,
-  guardHtml
+  guardHtml,
+  sanitizeHtml,
+  formatCacheKey,
+  inputHash,
+  readCache,
+  writeCache,
+  resolveTarget,
+  DEFAULT_BASE_URL,
+  DEFAULT_MODEL
 } from '../src/index.mjs'
 
 const HELP = `qformat —— 把一段题目文本整理成规范 HTML（数学公式用 KaTeX）
@@ -27,6 +36,7 @@ const HELP = `qformat —— 把一段题目文本整理成规范 HTML（数学�
   qformat repair <输入>            本地公式修复：Unicode → LaTeX、定界符归一，不联网
   qformat verify <输入>            KaTeX 逐段校验公式，有失败则退出码 1
   qformat guard <输入>             离线守卫：清洗、防泄题、公式归一、数字/选项守恒校验
+  qformat sanitize <输入>          HTML 白名单消毒：去 script / on* / javascript: / 内联 style
 
 输入
   文件路径，或 - 表示从标准输入读取
@@ -37,10 +47,15 @@ const HELP = `qformat —— 把一段题目文本整理成规范 HTML（数学�
                                    answer 表示这段内容本身就是答案，原样放行。
   --source <文件>                  guard 专用：用户原文（用于防泄题与守恒比对）
   --source-text <文本>             guard 专用：直接传原文文本
+  --sanitize                       guard 专用：检查后顺手做白名单消毒
   --out <文件>                     结果写入文件（默认打印到 stdout）
   --json                           以 JSON 输出（guard 输出 html/fixes/errors）
   --batch                          format 专用：输入按 JSON 数组处理
   --concurrency <n>                批量并发数，默认 3
+  --resume                         format --batch 专用：按 id 跳过已成功项，需配合 --out
+  --no-cache                       禁用结果缓存（默认启用）
+  --cache-dir <目录>               缓存目录，默认 .qformat-cache
+  --max-tokens <n>                 单次回复上限，默认 4096
   --api-key <key>                  覆盖 AI_API_KEY
   --base-url <url>                 覆盖 AI_BASE_URL，默认 https://api.deepseek.com/v1
   --model <name>                   覆盖 AI_MODEL，默认 deepseek-chat
@@ -51,8 +66,8 @@ const HELP = `qformat —— 把一段题目文本整理成规范 HTML（数学�
 示例
   echo '已知f(x)=x²-2x+3，求f(2)的值。' | qformat format - --field stem
   qformat repair 题库.txt --out 题库.html
-  qformat guard 整理后.html --source 原文.txt --field stem
-  qformat format 题目.json --batch --out 结果.json --concurrency 3
+  qformat guard 整理后.html --source 原文.txt --field stem --sanitize
+  qformat format 题目.json --batch --out 结果.json --concurrency 3 --resume
 `
 
 function parseArgs(rawArgv) {
@@ -91,6 +106,25 @@ function parseArgs(rawArgv) {
       case '--batch':
         opts.batch = true
         break
+      case '--resume':
+        opts.resume = true
+        break
+      case '--no-cache':
+        opts.noCache = true
+        break
+      case '--sanitize':
+        opts.sanitize = true
+        break
+      case '--cache-dir':
+        opts.cacheDir = takeValue()
+        break
+      case '--max-tokens': {
+        const raw = takeValue()
+        const n = Number(raw)
+        if (!Number.isInteger(n) || n <= 0) die(`--max-tokens 需要正整数，收到 ${raw}`)
+        opts.maxTokens = n
+        break
+      }
       case '--field':
         opts.field = takeValue()
         break
@@ -199,15 +233,99 @@ async function withRetry(fn) {
   }
 }
 
+const DEFAULT_CACHE_DIR = '.qformat-cache'
+const DEFAULT_MAX_TOKENS = 4096
+
+function cacheDirOf(opts) {
+  return resolve(opts.cacheDir || DEFAULT_CACHE_DIR)
+}
+
+function cacheKeyFor(opts, field, text) {
+  if (opts.noCache) return ''
+  const target = resolveTarget({
+    apiKey: 'cache',
+    baseUrl: opts.baseUrl,
+    model: opts.model
+  })
+  return formatCacheKey({
+    text,
+    field,
+    base: target.base || String(opts.baseUrl || process.env.AI_BASE_URL || DEFAULT_BASE_URL),
+    model: target.model || String(opts.model || process.env.AI_MODEL || DEFAULT_MODEL),
+    temperature: 0.2,
+    maxTokens: opts.maxTokens || DEFAULT_MAX_TOKENS
+  })
+}
+
+function idKey(id) {
+  return JSON.stringify(id)
+}
+
+function loadPrevious(outPath, partialPath) {
+  const map = new Map()
+  const add = (record) => {
+    if (record && record.id !== undefined) map.set(idKey(record.id), record)
+  }
+  if (outPath && existsSync(outPath)) {
+    try {
+      const rows = JSON.parse(readFileSync(outPath, 'utf8'))
+      if (Array.isArray(rows)) rows.forEach(add)
+    } catch {
+      // 旧的输出文件损坏时忽略，按全新批次处理
+    }
+  }
+  if (partialPath && existsSync(partialPath)) {
+    for (const line of readFileSync(partialPath, 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue
+      try {
+        add(JSON.parse(line))
+      } catch {
+        // 跳过崩溃时写了一半的行
+      }
+    }
+  }
+  return map
+}
+
+function appendPartial(partialPath, record) {
+  if (!partialPath) return
+  try {
+    mkdirSync(dirname(partialPath), { recursive: true })
+    appendFileSync(partialPath, JSON.stringify(record) + '\n')
+  } catch {
+    // 断点文件写失败不影响主流程
+  }
+}
+
+function startPartial(partialPath) {
+  if (!partialPath) return
+  try {
+    mkdirSync(dirname(partialPath), { recursive: true })
+    writeFileSync(partialPath, '')
+  } catch {
+    // 保持静默；没有断点文件仍然可以正常批量
+  }
+}
+
 async function cmdFormat(opts) {
   const input = readInput(opts._[1])
   const field = opts.field || 'auto'
   if (!VALID_FIELDS.has(field)) die(`--field 只能是 stem / body / answer / auto，收到 ${field}`)
+  const maxTokens = opts.maxTokens || DEFAULT_MAX_TOKENS
+  if (opts.resume && !opts.batch) die('--resume 只能用于 --batch')
 
   const call = (args) =>
-    formatQuestion({ ...args, apiKey: opts.apiKey, baseUrl: opts.baseUrl, model: opts.model, timeoutMs: opts.timeoutMs })
+    formatQuestion({
+      ...args,
+      apiKey: opts.apiKey,
+      baseUrl: opts.baseUrl,
+      model: opts.model,
+      maxTokens,
+      timeoutMs: opts.timeoutMs
+    })
 
   if (opts.batch) {
+    if (opts.resume && !opts.out) die('--resume 需要同时指定 --out')
     let items
     try {
       items = JSON.parse(input)
@@ -216,45 +334,93 @@ async function cmdFormat(opts) {
     }
     if (!Array.isArray(items)) die('批量输入必须是 JSON 数组 [{id, text, field}]')
 
+    const partialPath = opts.out ? resolve(opts.out) + '.partial' : ''
+    const previous = opts.resume && opts.out ? loadPrevious(resolve(opts.out), partialPath) : new Map()
+    startPartial(partialPath)
+    const cacheDir = cacheDirOf(opts)
+
     const results = await mapLimit(items, opts.concurrency || 3, async (item, index) => {
       const label = item?.id ?? `#${index + 1}`
       const text = item?.text ?? item?.content ?? ''
       const itemField = item?.field || field
+      const id = item?.id ?? index
+      const hashCode = inputHash({ text, field: itemField })
+      const prev = previous.get(idKey(id))
+      if (
+        prev &&
+        prev.ok &&
+        typeof prev.html === 'string' &&
+        (!prev.inputHash || prev.inputHash === hashCode)
+      ) {
+        process.stderr.write(`[${index + 1}/${items.length}] ${label} 跳过（已完成）\n`)
+        return { ...prev, resumed: true }
+      }
       try {
         if (!VALID_FIELDS.has(itemField)) {
           const e = new Error(`field 只能是 stem / body / answer / auto，收到 ${itemField}`)
           e.code = 'INVALID_FIELD'
           throw e
         }
-        const r = await withRetry(() => call({ text, field: itemField }))
-        process.stderr.write(`[${index + 1}/${items.length}] ${label} ok\n`)
-        return {
-          id: item?.id ?? index,
+        const cacheKey = cacheKeyFor(opts, itemField, text)
+        const cached = cacheKey ? readCache(cacheDir, cacheKey) : null
+        let r
+        let cachedHit = false
+        if (cached) {
+          r = cached
+          cachedHit = true
+        } else {
+          r = await withRetry(() => call({ text, field: itemField }))
+          if (cacheKey) writeCache(cacheDir, cacheKey, r)
+        }
+        const record = {
+          id,
           ok: true,
           html: r.html,
           changed: r.changed,
-          removedAnswer: r.removedAnswer
+          removedAnswer: r.removedAnswer,
+          cached: cachedHit,
+          inputHash: hashCode
         }
+        appendPartial(partialPath, record)
+        process.stderr.write(`[${index + 1}/${items.length}] ${label} ${cachedHit ? 'cached' : 'ok'}\n`)
+        return record
       } catch (e) {
+        const record = { id, ok: false, error: e.message, code: e.code }
+        appendPartial(partialPath, record)
         process.stderr.write(`[${index + 1}/${items.length}] ${label} 失败：${e.message}\n`)
-        return { id: item?.id ?? index, ok: false, error: e.message, code: e.code }
+        return record
       }
     })
+
     const failed = results.filter((r) => !r.ok).length
     emit(JSON.stringify(results, null, 2), opts.out)
+    if (partialPath) rmSync(partialPath, { force: true })
     if (failed) process.exitCode = 1
     return
   }
 
-  const result = await call({ text: input, field })
+  const cacheKey = cacheKeyFor(opts, field, input)
+  const cached = cacheKey ? readCache(cacheDirOf(opts), cacheKey) : null
+  let result
+  let cachedHit = false
+  if (cached) {
+    result = cached
+    cachedHit = true
+    process.stderr.write('qformat: 缓存命中\n')
+  } else {
+    result = await call({ text: input, field })
+    if (cacheKey) writeCache(cacheDirOf(opts), cacheKey, result)
+  }
+
   emit(
     opts.json
       ? JSON.stringify(
           {
             html: result.html,
             changed: result.changed,
-            dropped: result.dropped,
-            removedAnswer: result.removedAnswer
+            dropped: result.dropped ?? false,
+            removedAnswer: result.removedAnswer,
+            cached: cachedHit
           },
           null,
           2
@@ -274,6 +440,11 @@ function cmdRepair(opts) {
 async function cmdVerify(opts) {
   const input = readInput(opts._[1])
   const { total, failed } = await validateAiMath(input)
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ total, failed }, null, 2) + '\n')
+    if (failed.length) process.exitCode = 1
+    return
+  }
   if (!total) {
     process.stderr.write('qformat: 未找到任何 $...$ 公式\n')
     process.exitCode = 0
@@ -297,13 +468,24 @@ function cmdGuard(opts) {
   const field = opts.field || 'auto'
   if (!VALID_FIELDS.has(field)) die(`--field 只能是 stem / body / answer / auto，收到 ${field}`)
 
-  const result = guardHtml({ sourceText, html, field })
+  const result = guardHtml({
+    sourceText,
+    html,
+    field,
+    sanitize: Boolean(opts.sanitize)
+  })
   for (const fix of result.fixes) process.stderr.write(`qformat: 已修复 ${fix}\n`)
   for (const error of result.errors) {
     process.stderr.write(`qformat: ${error.code} — ${error.message}\n`)
   }
   emit(opts.json ? JSON.stringify(result, null, 2) : result.html, opts.out)
   if (result.errors.length) process.exitCode = 1
+}
+
+function cmdSanitize(opts) {
+  const input = readInput(opts._[1])
+  const html = sanitizeHtml(cleanAiHtml(input))
+  emit(opts.json ? JSON.stringify({ html, changed: html !== input.trim() }, null, 2) : html, opts.out)
 }
 
 async function main() {
@@ -329,7 +511,8 @@ async function main() {
     if (cmd === 'repair') return cmdRepair(opts)
     if (cmd === 'verify') return await cmdVerify(opts)
     if (cmd === 'guard') return cmdGuard(opts)
-    die(`未知命令：${cmd}（可用：format / repair / verify / guard）`)
+    if (cmd === 'sanitize') return cmdSanitize(opts)
+    die(`未知命令：${cmd}（可用：format / repair / verify / guard / sanitize）`)
   } catch (e) {
     if (e?.code === 'NO_API_KEY') die(e.message)
     if (e?.code === 'KATEX_MISSING') die(e.message)

@@ -2,16 +2,18 @@
 import { cleanAiHtml } from './clean.mjs'
 import { stripUnrequestedAnswerDetailed } from './strip-answer.mjs'
 import { normalizeAiMathHtml } from './normalize-math.mjs'
-import { loadSystemPrompt } from './prompt.mjs'
+import { buildSystemPrompt } from './prompt.mjs'
 import { callChat, resolveTarget } from './client.mjs'
 
 export { plainText, cleanAiHtml, balanceTags } from './clean.mjs'
 export { stripUnrequestedAnswer, stripUnrequestedAnswerDetailed } from './strip-answer.mjs'
 export { normalizeAiMathHtml, extractMath, scanMath, UNICODE_MATH } from './normalize-math.mjs'
 export { guardHtml, collectNumbers, collectOptions } from './guard.mjs'
+export { sanitizeHtml } from './sanitize.mjs'
+export { formatCacheKey, inputHash, readCache, writeCache } from './cache.mjs'
 export { validateAiMath } from './validate-math.mjs'
 export { callChat, resolveTarget, DEFAULT_BASE_URL, DEFAULT_MODEL } from './client.mjs'
-export { loadSystemPrompt } from './prompt.mjs'
+export { loadSystemPrompt, buildSystemPrompt } from './prompt.mjs'
 
 /**
  * 纯函数后处理：清洗 → 防泄题截断 → 公式规范化。
@@ -42,6 +44,7 @@ export function postProcess(raw, sourceText, field = 'auto') {
  * @param {string} [opts.baseUrl]
  * @param {string} [opts.model]
  * @param {number} [opts.temperature]
+ * @param {number} [opts.maxTokens]
  * @param {number} [opts.timeoutMs]
  * @param {Function} [opts.call] 注入的调用函数（测试用）
  * @returns {Promise<{ html: string, dropped: boolean, changed: boolean, removedAnswer: boolean }>}
@@ -53,6 +56,7 @@ export async function formatQuestion({
   baseUrl,
   model,
   temperature = 0.2,
+  maxTokens = 4096,
   timeoutMs,
   call = callChat
 } = {}) {
@@ -72,9 +76,10 @@ export async function formatQuestion({
   const raw = await call({
     ...target,
     temperature,
+    maxTokens,
     timeoutMs,
     messages: [
-      { role: 'system', content: loadSystemPrompt() },
+      { role: 'system', content: buildSystemPrompt(field) },
       { role: 'user', content: String(text) }
     ]
   })

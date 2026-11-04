@@ -80,3 +80,21 @@ test('postProcess：报告删除的答案与清理的围栏', () => {
   assert.equal(r.removedAnswer, true)
   assert.equal(r.dropped, false)
 })
+
+test('formatQuestion：系统提示带上字段规则，并传 maxTokens', async () => {
+  let seen
+  const call = async (args) => {
+    seen = args
+    return '<p><strong>答案：</strong>4</p>'
+  }
+  const r = await formatQuestion({
+    text: '答案：4',
+    field: 'answer',
+    apiKey: 'test-key',
+    maxTokens: 8192,
+    call
+  })
+  assert.equal(r.html, '<p><strong>答案：</strong>4</p>')
+  assert.match(seen.messages[0].content, /答案与解析/)
+  assert.equal(seen.maxTokens, 8192)
+})

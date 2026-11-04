@@ -115,3 +115,42 @@ test('整份都是补写的答案时返回空串并报错', () => {
   assert.equal(r.ok, false)
   assert.ok(r.errors.some((e) => e.code === 'ALL_ANSWERS_DROPPED'))
 })
+
+test('丢失选项被报错', () => {
+  const r = guardHtml({
+    sourceText: '求 f(2)。\nA.1 B.3 C.5 D.7',
+    html: '<p>求 $f(2)$。</p><p>A. 1</p><p>B. 3</p><p>C. 5</p>',
+    field: 'stem'
+  })
+  assert.ok(r.errors.some((e) => e.code === 'LOST_OPTION'))
+})
+
+test('（A）格式的选项能正确识别', () => {
+  const r = guardHtml({
+    sourceText: '求 f(2)。\n（A）1 （B）3',
+    html: '<p>求 $f(2)$。</p><p>（A）1</p><p>（B）3</p>',
+    field: 'stem'
+  })
+  assert.equal(r.ok, true)
+})
+
+test('sanitize 选项会顺手清掉危险标签', () => {
+  const r = guardHtml({
+    sourceText: '求 x。',
+    html: '<p>求 $x$。</p><script>alert(1)</script>',
+    field: 'stem',
+    sanitize: true
+  })
+  assert.equal(r.ok, true)
+  assert.equal(r.html, '<p>求 $x$。</p>')
+  assert.ok(r.fixes.includes('SANITIZED'))
+})
+
+test('图片 alt 里的数字不会误报丢失', () => {
+  const r = guardHtml({
+    sourceText: '如图1所示。',
+    html: '<p>如图<img src="x.png" alt="图1">所示。</p>',
+    field: 'stem'
+  })
+  assert.equal(r.ok, true)
+})

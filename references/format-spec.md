@@ -26,7 +26,7 @@ node bin/qformat.mjs guard 输出.html --source 原文.txt --field stem
 | 错误码 | 含义 |
 | --- | --- |
 | `ADDED_NUMBER` / `LOST_NUMBER` | 输出多出 / 少了原文的数字（改题、漏抄条件） |
-| `ADDED_OPTION` | 原文没有的选项被补出来 |
+| `ADDED_OPTION` / `LOST_OPTION` | 原文没有的选项被补出来 / 原文的选项丢了 |
 | `TEXT_OUTSIDE_TAGS` | 有正文落在 `<p>` 等标签外 |
 | `BARE_DOLLAR` | 正文里有未配对的 `$` |
 | `UNICODE_MATH_LEFT` | 公式或正文里还有 Unicode 数学符号 |
@@ -34,6 +34,9 @@ node bin/qformat.mjs guard 输出.html --source 原文.txt --field stem
 | `INLINE_STYLE` | 内联 `style`（落库会被剥掉） |
 
 它不判断语义是否正确，只守住「排版不是改题」这条线。
+
+`sanitize` 命令按第 2 节的「允许的标签」做白名单消毒，并只给图片保留 `src` / `alt` / `width` / `height`，
+给单元格保留 `colspan` / `rowspan`；其他属性（`class`、`id`、`style`、`on*`）一律丢弃。
 
 ## 2. 结构约定
 

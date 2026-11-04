@@ -5,6 +5,7 @@
 import { balanceTags, cleanAiHtml, plainText } from './clean.mjs'
 import { normalizeAiMathHtml, scanMath, UNICODE_MATH } from './normalize-math.mjs'
 import { stripUnrequestedAnswerDetailed } from './strip-answer.mjs'
+import { sanitizeHtml } from './sanitize.mjs'
 
 const VOID_TAGS = new Set(['br', 'img', 'hr', 'input', 'meta', 'link', 'source', 'col'])
 
@@ -46,7 +47,12 @@ function normalizeNumericChars(text) {
 /** 收集数字集合，用于「原文有的数字不能少、原文没有的数字不能多」 */
 export function collectNumbers(text) {
   const set = new Set()
-  const normalized = normalizeNumericChars(plainText(text))
+  // 图片 alt 里的题号/图号也算正文数字，避免「图1」被误判为丢失
+  const withAlt = String(text || '').replace(
+    /<img\b[^>]*?\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
+    (_, a, b, c) => ` ${a || b || c} `
+  )
+  const normalized = normalizeNumericChars(plainText(withAlt))
   for (const match of normalized.matchAll(/\d+(?:\.\d+)?/g)) set.add(match[0])
   return set
 }
@@ -56,7 +62,7 @@ export function collectOptions(text, isHtml = false) {
   const set = new Set()
   const src = String(text || '')
   const re = isHtml
-    ? /<(?:p|li|div)[^>]*>\s*(?:<[^>]+>\s*)*([A-H])\s*[.、．)）]/gi
+    ? /<(?:p|li|div)[^>]*>\s*(?:<[^>]+>\s*)*[（(]?\s*([A-H])\s*[.、．)）]/gi
     : /(?:^|[\s，。；;：:（(])(?:([A-H])\s*[.、．)）]|[（(]([A-H])[）)])/g
   for (const match of src.matchAll(re)) {
     const letter = (match[1] || match[2] || '').toUpperCase()
@@ -103,6 +109,7 @@ function removeMath(text) {
  * @param {string} opts.sourceText 用户原文
  * @param {string} opts.html 待检查的 HTML
  * @param {'stem'|'body'|'answer'|'auto'} [opts.field]
+ * @param {boolean} [opts.sanitize] 是否顺手做白名单消毒
  * @returns {{
  *   html: string,
  *   field: string,
@@ -113,7 +120,7 @@ function removeMath(text) {
  *   ok: boolean
  * }}
  */
-export function guardHtml({ sourceText, html, field = 'auto' } = {}) {
+export function guardHtml({ sourceText, html, field = 'auto', sanitize = false } = {}) {
   const original = String(html || '')
   const fixes = []
   const errors = []
@@ -148,6 +155,12 @@ export function guardHtml({ sourceText, html, field = 'auto' } = {}) {
   if (normalized.changed) fixes.push('NORMALIZED_MATH')
   out = normalized.html
 
+  if (sanitize) {
+    const safe = sanitizeHtml(out)
+    if (safe !== out) fixes.push('SANITIZED')
+    out = safe
+  }
+
   if (!out.trim()) {
     addError('EMPTY_RESULT', '输出为空')
   } else {
@@ -180,6 +193,10 @@ export function guardHtml({ sourceText, html, field = 'auto' } = {}) {
     const addedOptions = [...outOptions].filter((letter) => !srcOptions.has(letter))
     if (addedOptions.length) {
       addError('ADDED_OPTION', `输出出现原文没有的选项 ${addedOptions.join('、')}`)
+    }
+    const lostOptions = [...srcOptions].filter((letter) => !outOptions.has(letter))
+    if (lostOptions.length) {
+      addError('LOST_OPTION', `原文的选项 ${lostOptions.join('、')} 在输出中消失`)
     }
 
     if (/<\s*(?:script|style|iframe|object|embed|form|link|meta)\b/i.test(out)) {

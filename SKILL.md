@@ -1,6 +1,6 @@
 ---
 name: question-format
-description: 把 Word、聊天记录、截图 OCR 里粘来的数学题目整理成结构规范、公式可渲染的 HTML。用于「整理/排版/规范化题目格式」「把公式改成能渲染的写法」「批量把题目转成 HTML」，典型输入是 Unicode 数学符号（² √ ≥ α）、选项挤一行、公式没有定界符。内置确定性防泄题与数字/选项守恒校验；不做 OCR、不出新题、不判分、不改题意。
+description: 把 Word、聊天记录、截图 OCR 里粘来的数学题目整理成结构规范、公式可渲染的 HTML。用于「整理/排版/规范化题目格式」「把公式改成能渲染的写法」「批量把题目转成 HTML」，典型输入是 Unicode 数学符号（² √ ≥ α）、选项挤一行、公式没有定界符。内置确定性防泄题、数字/选项守恒与 HTML 消毒；不做 OCR、不出新题、不判分、不改题意。
 ---
 
 # 题目排版 Skill
@@ -27,6 +27,7 @@ description: 把 Word、聊天记录、截图 OCR 里粘来的数学题目整理
 | 用户有几十上百道题要批量处理 | **C. CLI 批处理** | `node bin/qformat.mjs format <items.json> --batch`（需要 API Key，可加 `--concurrency`） |
 | 已有 HTML，想确认公式能不能渲染 | **校验** | `node bin/qformat.mjs verify <文件>`（需 `npm i`） |
 | 已有 HTML，想确认没泄题、没改数字 | **守卫** | `node bin/qformat.mjs guard <文件> --source <原文>` |
+| 已有 HTML，想清掉脚本/事件属性 | **消毒** | `node bin/qformat.mjs sanitize <文件>` |
 
 不要为了「用上工具」而绕路：单道题直接排版比调 CLI 快得多，也更可控。
 批处理才用 CLI——它省钱、逐项隔离失败、结果可回填。
@@ -39,7 +40,7 @@ description: 把 Word、聊天记录、截图 OCR 里粘来的数学题目整理
 
 ## 排版规则（路径 A 必读）
 
-规则的事实来源是 `references/prompt.md`，那是经过线上验证的系统提示词；下面是它的执行要点。
+排版规则的事实来源是 `references/prompt.md`，字段规则由 `buildSystemPrompt(field)` 追加；下面是执行要点。
 
 1. **只整理，不新增。** 用户没写的选项、条件、答案、解析、结论、评注，一个都不能出现。
    原文没有答案与解析时，输出里绝对不能出现「答案：」「解析：」这两个词。
@@ -73,13 +74,16 @@ description: 把 Word、聊天记录、截图 OCR 里粘来的数学题目整理
 node bin/qformat.mjs guard 输出.html --source 原文.txt --field stem
 # 没有原文文件时也可以直接传文本：
 node bin/qformat.mjs guard 输出.html --source-text '已知…' --field stem
+# 检查 + 白名单消毒一次完成：
+node bin/qformat.mjs guard 输出.html --source 原文.txt --field stem --sanitize
 ```
 
-它会做四件事：清洗围栏/前后语、删掉补写的答案解析、归一公式、校验数字与选项是否守恒。
+它会做五件事：清洗围栏/前后语、删掉补写的答案解析、归一公式、校验数字与选项是否守恒、
+（加 `--sanitize` 时）按白名单清掉脚本/事件属性/危险链接。
 `--source` 要传**这段输出对应的完整原文**（题干 + 选项）；如果选项或数字来自另一个字段，
 守恒校验会把它们当成「新增」，此时只对同一字段的内容跑，或人工确认。
 有不可修复问题时退出码为 1，并打印 `ADDED_NUMBER` / `LOST_NUMBER` / `ADDED_OPTION` /
-`TEXT_OUTSIDE_TAGS` / `BARE_DOLLAR` / `UNICODE_MATH_LEFT` 等错误码。
+`LOST_OPTION` / `TEXT_OUTSIDE_TAGS` / `BARE_DOLLAR` / `UNICODE_MATH_LEFT` 等错误码。
 **不要为了通过 guard 去改原文**——它报错通常意味着排版时漏抄或改动了内容。
 
 **字段身份必须问清楚。** 如果用户是在整理「答案与解析」字段（而不是题干），必须先确认，
@@ -123,11 +127,14 @@ node bin/qformat.mjs repair 题干.html --out 修复.html
 
 ```bash
 export AI_API_KEY=sk-xxx          # Windows PowerShell: $env:AI_API_KEY="sk-xxx"
-node bin/qformat.mjs format items.json --batch --out result.json --concurrency 3
+node bin/qformat.mjs format items.json --batch --out result.json --concurrency 3 --resume
 ```
 
-输出 `[{id, ok, html, changed, removedAnswer}]`，失败项带 `error` 与 `code`。
-逐项失败不中断整批；429/5xx 会退避重试两次。
+输出 `[{id, ok, html, changed, removedAnswer, cached, resumed, inputHash}]`，失败项带 `error` 与 `code`。
+逐项失败不中断整批；429/5xx 会退避重试两次。默认使用 `.qformat-cache/` 缓存，
+同一文本 + 字段 + 模型 + 提示词不会重复计费；`--no-cache` 关闭，`--cache-dir` 改位置。
+`--resume` 按 `id + 输入哈希` 跳过 `ok:true` 且内容未变的项，只重跑失败或改动项；每完成一项会写 `result.json.partial`，
+中断后不丢整批。长答案/解析可用 `--max-tokens` 调大回复上限。
 单道题用 `echo '…' | node bin/qformat.mjs format - --field stem`。
 
 ## 失败处理
@@ -139,12 +146,15 @@ node bin/qformat.mjs format items.json --batch --out result.json --concurrency 3
 | `EMPTY_RESULT` | 模型没返回内容 | 换模型重试；或自己排版 |
 | `KATEX_MISSING` | 没装 katex | `npm install` |
 | `TIMEOUT` / `NETWORK_ERROR` | 超时 / 网络失败 | 调大 `--timeout`，或检查代理 / `--base-url` |
+| `BAD_RESPONSE` | 上游返回的不是合法 JSON | 检查 `--base-url` 或中转服务 |
+| `INVALID_FIELD` | 批量项里的 `field` 不合法 | 改成 stem / body / answer / auto |
 | HTTP 401/402/429 | Key 无效 / 欠费 / 限流 | 原样告知用户，不要反复重试 |
 
 `guard` 的错误码（退出码 1）：`ADDED_NUMBER` / `LOST_NUMBER` 表示数字被改或漏抄；
-`ADDED_OPTION` 表示凭空补了选项；`TEXT_OUTSIDE_TAGS` 表示有内容落在 `<p>` 等标签外；
+`ADDED_OPTION` / `LOST_OPTION` 表示凭空补了选项或丢了选项；`TEXT_OUTSIDE_TAGS` 表示有内容落在 `<p>` 等标签外；
 `BARE_DOLLAR` 表示正文有未配对的 `$`；`UNICODE_MATH_LEFT` 表示公式里还有 Unicode 符号；
-`DANGEROUS_TAG` / `DANGEROUS_ATTR` 表示输出里混进了脚本或事件属性。
+`DANGEROUS_TAG` / `DANGEROUS_ATTR` / `DANGEROUS_URL` / `INLINE_STYLE` 表示输出里混进了脚本、
+事件属性、`javascript:` 链接或内联样式。
 
 超时（默认 120s）多在模型侧：先调大 `--timeout`，仍不行就换 `--model`。
 
@@ -162,6 +172,6 @@ node bin/qformat.mjs format items.json --batch --out result.json --concurrency 3
 | `references/prompt.md` | 线上验证过的系统提示词，CLI 发送的就是它 |
 | `references/format-spec.md` | 输出契约、LaTeX 命令对照表、输入→输出示例、已知边界 |
 | `references/answer-leak.md` | 为什么要做防泄题、判定规则、为什么要「开头匹配」而非「包含」 |
-| `bin/qformat.mjs` | 命令行入口（format / repair / verify / guard） |
-| `src/` | 纯函数实现，可单独 import（`src/index.mjs` 是统一出口；`src/guard.mjs` 是离线守卫） |
-| `test/` | 68 条用例，覆盖防泄题边界、公式归一、守恒校验与 CLI 冒烟 |
+| `bin/qformat.mjs` | 命令行入口（format / repair / verify / guard / sanitize） |
+| `src/` | 纯函数实现，可单独 import（`src/index.mjs` 是统一出口；`src/guard.mjs` 是离线守卫；`src/sanitize.mjs` 是消毒器） |
+| `test/` | 89 条用例，覆盖防泄题边界、公式归一、守恒校验、HTML 消毒、缓存与 CLI 冒烟 |

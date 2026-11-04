@@ -36,3 +36,5 @@ jobs:
           printf '<p>求 $f(2)$。</p><p>答案：4</p>' > guard-smoke.html
           node bin/qformat.mjs guard guard-smoke.html --source-text '求 f(2)。' --field stem
           rm guard-smoke.html
+          printf '<p>hi<script>x</script></p>' | node bin/qformat.mjs sanitize -
+          printf '$x²$' | node bin/qformat.mjs repair - | node bin/qformat.mjs verify - --json > /dev/null
