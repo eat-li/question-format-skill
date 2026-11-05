@@ -86,3 +86,38 @@ test('不把跨 HTML 标签的 $...$ 当公式', () => {
   const src = '<p>价格 $5</p><p>另付 $10</p>'
   assert.equal(normalizeAiMathHtml(src).html, src)
 })
+
+test('几何符号补充：∽ ″ ≪ ≫ ⌒ ∟ 都转成可渲染命令', () => {
+  // 后面紧跟 \triangle 时无需空格：LaTeX 控制词以反斜杠为界，\backsim\triangle 是合法的
+  assert.equal(normalizeAiMathHtml('$△ABC∽△DEF$').html, '$\\triangle ABC\\backsim\\triangle DEF$')
+  assert.equal(normalizeAiMathHtml('$30°15″$').html, '$30^\\circ15^{\\prime\\prime}$')
+  assert.equal(normalizeAiMathHtml('$a≪b$').html, '$a\\ll b$')
+  assert.equal(normalizeAiMathHtml('$a≫b$').html, '$a\\gg b$')
+  assert.equal(normalizeAiMathHtml('$⌒AB$').html, '$\\frown AB$')
+  assert.equal(normalizeAiMathHtml('$∟ABC$').html, '$\\llcorner ABC$')
+})
+
+test('已是完整命令的不被空格修复拆开（\\llcorner 不能变成 \\ll corner）', () => {
+  // 回归：早前用「命令 + 后视字母」的正则，会把 \llcorner 拆成 \ll corner，不报错但符号画错
+  assert.equal(normalizeAiMathHtml('$\\llcorner ABC$').html, '$\\llcorner ABC$')
+  assert.equal(normalizeAiMathHtml('$\\subseteq A$').html, '$\\subseteq A$')
+  assert.equal(normalizeAiMathHtml('$\\backsim B$').html, '$\\backsim B$')
+  assert.equal(normalizeAiMathHtml('$\\angle A=30^\\circ$').html, '$\\angle A=30^\\circ$')
+})
+
+test('长得像「短命令 + 字母」的合法命令也不被拆（\\neq / \\inf / \\sinh …）', () => {
+  // 回归：\ne 是 \neq 的前缀、\in 是 \inf 的前缀、\sin 是 \sinh 的前缀，
+  // 只按前缀判断会把它们拆成 \ne q / \in f / \sin h —— KaTeX 不报错，但符号画错。
+  const intact = [
+    'neq', 'nexists', 'inf', 'infin', 'sinh', 'cosh', 'tanh', 'leq', 'geq',
+    'leqslant', 'geqslant', 'subsetneq', 'subseteqq', 'lneq', 'lnot', 'neg',
+    'nearrow', 'left', 'gets', 'top', 'pmod', 'pitchfork'
+  ]
+  for (const cmd of intact) {
+    const src = `$a\\${cmd} b$`
+    assert.equal(normalizeAiMathHtml(src).html, src, `\\${cmd} 被拆开了`)
+  }
+  // 拼写错误该补空格还得补
+  assert.equal(normalizeAiMathHtml('$\\angleA=30^\\circ$').html, '$\\angle A=30^\\circ$')
+  assert.equal(normalizeAiMathHtml('$\\alphax$').html, '$\\alpha x$')
+})

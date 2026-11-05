@@ -37,33 +37,126 @@ const FRACTIONS = { '½': '1 2', '⅓': '1 3', '⅔': '2 3', '¼': '1 4', '¾': 
 
 const UNICODE_MATH_RE = new RegExp(`[${Object.keys(UNICODE_MATH).join('')}√]`)
 
+const FULLWIDTH_DIGITS = {
+  '０': '0',
+  '１': '1',
+  '２': '2',
+  '３': '3',
+  '４': '4',
+  '５': '5',
+  '６': '6',
+  '７': '7',
+  '８': '8',
+  '９': '9'
+}
+
+/** 数量级后缀：3.5万 与 35000 是同一个数，不能当成改题 */
+const MAGNITUDE_UNITS = { 千: 1e3, 万: 1e4, 亿: 1e8 }
+
 function normalizeNumericChars(text) {
   return String(text || '')
     .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, (ch) => SUPERSCRIPT[ch])
     .replace(/[₀₁₂₃₄₅₆₇₈₉]/g, (ch) => SUBSCRIPT[ch])
     .replace(/[½⅓⅔¼¾]/g, (ch) => FRACTIONS[ch])
+    .replace(/[０-９]/g, (ch) => FULLWIDTH_DIGITS[ch])
+}
+
+function formatMagnitude(value) {
+  if (!Number.isFinite(value)) return ''
+  const rounded = value.toFixed(10).replace(/\.?0+$/, '')
+  return rounded || '0'
+}
+
+/**
+ * 逗号是「千分位」还是「列表分隔符」只能看上下文。
+ *
+ * `[1,200]`、`(1,2,3)` 这种被括号整段包住的数字串是区间/坐标/枚举，逗号是分隔符；
+ * `标价1,200元` 里的逗号才是千分位。判断错的代价是双向误报：
+ * 把区间读成 1200，模型在逗号后加个空格（`[1, 200]`）就会被判成「改成另一个数」。
+ */
+function isListSeparator(str, offset) {
+  const isNumeric = (ch) => ch !== undefined && /[\d.，,]/.test(ch)
+  let start = offset
+  while (start > 0 && isNumeric(str[start - 1])) start -= 1
+  let end = offset + 1
+  while (end < str.length && isNumeric(str[end])) end += 1
+  const open = str[start - 1]
+  const close = str[end]
+  return (
+    (open === '[' || open === '(' || open === '（' || open === '【' || open === '{' || open === '｛') &&
+    (close === ']' || close === ')' || close === '）' || close === '】' || close === '}' || close === '｝')
+  )
+}
+
+/** 3.5×10^4、3.5\\times10^{4}、3.5万 都还原成 35000，只用于比对，不改输出 */
+function expandComparableNumbers(text) {
+  let out = String(text || '')
+  // 千分位：1,000,000 → 1000000（只吃「恰好三位一组」的逗号，且排除括号内的数字列表）
+  out = out.replace(/(?<=\d)[,，](?=\d{3}(?:[,，]\d{3})*(?!\d))/g, (match, offset, str) =>
+    isListSeparator(str, offset) ? match : ''
+  )
+  // a × 10^n
+  out = out.replace(
+    /(\d+(?:\.\d+)?)\s*(?:\\times|\\cdot|×|·|\*)\s*10\s*\^\s*\{?\s*(-?\d+)\s*\}?/g,
+    (match, base, exp) => {
+      const value = Number(base) * 10 ** Number(exp)
+      return Number.isFinite(value) ? ` ${formatMagnitude(value)} ` : match
+    }
+  )
+  // 孤立的 10^n（前面已无乘数）
+  out = out.replace(/(?<![\d.])10\s*\^\s*\{?\s*(-?\d+)\s*\}?/g, (match, exp) => {
+    const value = 10 ** Number(exp)
+    return Number.isFinite(value) ? ` ${formatMagnitude(value)} ` : match
+  })
+  // 3.5万 / 20千 / 1.2亿
+  out = out.replace(/(\d+(?:\.\d+)?)\s*([千万亿])/g, (match, base, unit) => {
+    const value = Number(base) * MAGNITUDE_UNITS[unit]
+    return Number.isFinite(value) ? ` ${formatMagnitude(value)} ` : match
+  })
+  return out
+}
+
+/** 图片 alt 里的题号/图号也算正文数字，避免「图1」被误判为丢失 */
+function withImageAlt(text) {
+  return String(text || '').replace(
+    /<img\b[^>]*?\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
+    (_, a, b, c) => ` ${a || b || c} `
+  )
+}
+
+/**
+ * 收集数字及其出现次数。次数用于发现「原文出现两次、输出只剩一次」（题号被吞）。
+ * @param {string} text
+ * @returns {Map<string, number>}
+ */
+export function collectNumberCounts(text) {
+  const counts = new Map()
+  const normalized = expandComparableNumbers(normalizeNumericChars(plainText(withImageAlt(text))))
+  for (const match of normalized.matchAll(/\d+(?:\.\d+)?/g)) {
+    counts.set(match[0], (counts.get(match[0]) || 0) + 1)
+  }
+  return counts
 }
 
 /** 收集数字集合，用于「原文有的数字不能少、原文没有的数字不能多」 */
 export function collectNumbers(text) {
-  const set = new Set()
-  // 图片 alt 里的题号/图号也算正文数字，避免「图1」被误判为丢失
-  const withAlt = String(text || '').replace(
-    /<img\b[^>]*?\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
-    (_, a, b, c) => ` ${a || b || c} `
-  )
-  const normalized = normalizeNumericChars(plainText(withAlt))
-  for (const match of normalized.matchAll(/\d+(?:\.\d+)?/g)) set.add(match[0])
-  return set
+  return new Set(collectNumberCounts(text).keys())
 }
 
-/** 收集选项字母；富文本按 <p>A. …</p> 形态取，纯文本按 A. / (A) 形态取 */
+/**
+ * 收集选项字母；富文本按 <p>A. …</p> 形态取，纯文本按 A. / (A) 形态取。
+ * 上限放到 J：多选题与「下列 A~I 九项」确实存在，早先的 [A-H] 会把 I 之后的选项静默漏掉。
+ *
+ * 纯文本侧用「前面不能紧跟字母或数字」做边界，而不是白名单分隔符：
+ * `…的值为（　）A.5` 这种题面里 A 前面是全角右括号，白名单会漏掉 A，
+ * 于是 A 被当成「输出新增的选项」误报 ADDED_OPTION。
+ */
 export function collectOptions(text, isHtml = false) {
   const set = new Set()
   const src = String(text || '')
   const re = isHtml
-    ? /<(?:p|li|div)[^>]*>\s*(?:<[^>]+>\s*)*[（(]?\s*([A-H])\s*[.、．)）]/gi
-    : /(?:^|[\s，。；;：:（(])(?:([A-H])\s*[.、．)）]|[（(]([A-H])[）)])/g
+    ? /<(?:p|li|div)[^>]*>\s*(?:<[^>]+>\s*)*[（(]?\s*([A-J])\s*[.、．)）]/gi
+    : /(?<![A-Za-z0-9])(?:([A-J])\s*[.、．)）]|[（(]([A-J])[）)])/g
   for (const match of src.matchAll(re)) {
     const letter = (match[1] || match[2] || '').toUpperCase()
     if (letter) set.add(letter)
@@ -115,6 +208,7 @@ function removeMath(text) {
  *   field: string,
  *   fixes: string[],
  *   errors: { code: string, message: string }[],
+ *   warnings: { code: string, message: string }[],
  *   removedAnswer: boolean,
  *   changed: boolean,
  *   ok: boolean
@@ -124,7 +218,9 @@ export function guardHtml({ sourceText, html, field = 'auto', sanitize = false }
   const original = String(html || '')
   const fixes = []
   const errors = []
+  const warnings = []
   const addError = (code, message) => errors.push({ code, message })
+  const addWarn = (code, message) => warnings.push({ code, message })
 
   let out = cleanAiHtml(original)
   if (out !== original.trim()) fixes.push('CLEANED_OUTPUT')
@@ -139,6 +235,7 @@ export function guardHtml({ sourceText, html, field = 'auto', sanitize = false }
       field,
       fixes,
       errors,
+      warnings,
       removedAnswer: true,
       changed: true,
       ok: false
@@ -179,13 +276,20 @@ export function guardHtml({ sourceText, html, field = 'auto', sanitize = false }
       addError('UNICODE_MATH_LEFT', `还有 Unicode 数学符号：${residue.trim().slice(0, 40)}`)
     }
 
-    const srcNumbers = collectNumbers(sourceText)
-    const outNumbers = collectNumbers(out)
-    for (const number of outNumbers) {
+    const srcNumbers = collectNumberCounts(sourceText)
+    const outNumbers = collectNumberCounts(out)
+    for (const [number, count] of outNumbers) {
       if (!srcNumbers.has(number)) addError('ADDED_NUMBER', `输出出现原文没有的数字 ${number}`)
+      else if (count > srcNumbers.get(number)) {
+        // 多出来的重复不是「加数字」那么严重，但常见于模型顺手补条件（同一个 3 写两遍）
+        addWarn('NUMBER_COUNT_ADDED', `数字 ${number} 出现次数变多（原文 ${srcNumbers.get(number)} 次）`)
+      }
     }
-    for (const number of srcNumbers) {
+    for (const [number, count] of srcNumbers) {
       if (!outNumbers.has(number)) addError('LOST_NUMBER', `原文的数字 ${number} 在输出中消失`)
+      else if (outNumbers.get(number) < count) {
+        addWarn('NUMBER_COUNT_DROPPED', `数字 ${number} 出现次数变少（原文 ${count} 次，输出 ${outNumbers.get(number)} 次）`)
+      }
     }
 
     const srcOptions = collectOptions(plainText(sourceText), false)
@@ -214,6 +318,7 @@ export function guardHtml({ sourceText, html, field = 'auto', sanitize = false }
     field,
     fixes,
     errors,
+    warnings,
     removedAnswer: stripped.removed,
     changed: out !== original,
     ok: errors.length === 0

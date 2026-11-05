@@ -478,6 +478,10 @@ function cmdGuard(opts) {
   for (const error of result.errors) {
     process.stderr.write(`qformat: ${error.code} — ${error.message}\n`)
   }
+  // 警告不改退出码：次数类偏差（题号被吞、同一数字少写一次）需要人来判断严重程度
+  for (const warning of result.warnings || []) {
+    process.stderr.write(`qformat: 提示 ${warning.code} — ${warning.message}\n`)
+  }
   emit(opts.json ? JSON.stringify(result, null, 2) : result.html, opts.out)
   if (result.errors.length) process.exitCode = 1
 }

@@ -62,6 +62,13 @@ export const UNICODE_MATH = {
   '≌': '\\cong',
   '∴': '\\therefore',
   '∵': '\\because',
+  // 几何与角度题高频：早先缺这几项，导致 $∽$ 之类原样残留、KaTeX 渲染失败
+  '∽': '\\backsim',
+  '≪': '\\ll',
+  '≫': '\\gg',
+  '⌒': '\\frown',
+  '∟': '\\llcorner',
+  '″': '^{\\prime\\prime}',
   α: '\\alpha',
   β: '\\beta',
   γ: '\\gamma',
@@ -93,24 +100,60 @@ export const UNICODE_MATH = {
 
 const EXTRA_COMMANDS = ['\\sin', '\\cos', '\\tan', '\\log', '\\ln', '\\lim', '\\max', '\\min']
 
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
+/**
+ * 补空格时不能拆的长命令。
+ *
+ * 单靠「以已知前缀开头」判断是不够的：\neq 以 \ne 开头、\inf 以 \in 开头、\sinh 以 \sin 开头，
+ * 早先的实现会把它们拆成 \ne q / \in f / \sin h——KaTeX 不报错，但符号画错。
+ * 这里列出所有「以本表前缀开头、且本身是合法 KaTeX 命令」的名字（从 katex dist 里抽全，
+ * 已逐条 renderToString 验证）。\anglex 这种真实拼写错误仍然会被补空格。
+ */
+const PREFIX_EXTENDED_COMMANDS = [
+  'approxcolon', 'approxcoloncolon', 'approxeq', 'backsimeq', 'cdotp', 'cdots', 'cosec',
+  'cosh', 'divideontimes', 'genfrac', 'geq', 'geqq', 'geqslant', 'gets', 'ggg', 'gggtr',
+  'includegraphics', 'inf', 'infin', 'injlim', 'intercal', 'intop', 'leadsto', 'left',
+  'leftarrowtail', 'leftharpoondown', 'leftharpoonup', 'leftleftarrows', 'leftrightarrow',
+  'leftrightarrows', 'leftrightharpoons', 'leftrightsquigarrow', 'leftthreetimes', 'leq',
+  'leqq', 'leqslant', 'lessapprox', 'lessdot', 'lesseqgtr', 'lesseqqgtr', 'lessgtr',
+  'lesssim', 'let', 'liminf', 'limits', 'limsup', 'llap', 'llbracket', 'lll', 'llless',
+  'lnapprox', 'lneq', 'lneqq', 'lnot', 'lnsim', 'minuscolon', 'minuscoloncolon', 'minuso',
+  'multimap', 'nearrow', 'neg', 'negmedspace', 'negthickspace', 'negthinspace', 'neq',
+  'newcommand', 'newline', 'nexists', 'pitchfork', 'pmb', 'pmod', 'sinh', 'subseteqq',
+  'subsetneq', 'subsetneqq', 'tanh', 'thetasym', 'top', 'triangledown', 'triangleleft',
+  'trianglelefteq', 'triangleq', 'triangleright', 'trianglerighteq'
+]
 
-// 只在这些已知命令后面补空格：\alphax → \alpha x，但不会把 \alpha 拆成 \alph a。
-// 长命令排前面，避免 \subseteq 被 \subset 抢先匹配。
-const COMMAND_SPACE_RE = (() => {
+// 已知控制词全集（长命令排前面：\llcorner 必须先于 \ll 匹配）
+const KNOWN_COMMANDS = (() => {
   const commands = new Set(EXTRA_COMMANDS)
   for (const latex of Object.values(UNICODE_MATH)) {
     const match = /^\\[a-zA-Z]+/.exec(latex)
     if (match) commands.add(match[0])
   }
-  const pattern = [...commands]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegExp)
-    .join('|')
-  return new RegExp(`(${pattern})(?=[a-zA-Z])`, 'g')
+  return [...commands].sort((a, b) => b.length - a.length)
 })()
+
+const KNOWN_COMMAND_SET = new Set([
+  ...KNOWN_COMMANDS,
+  ...PREFIX_EXTENDED_COMMANDS.map((name) => `\\${name}`)
+])
+
+/**
+ * 补空格：\angleA 会被当成未定义命令 \angleA，要改成 \angle A。
+ *
+ * 必须整段配对再判断，不能写成「命令 + 后视字母」：后者会把本来正确的 \llcorner
+ * 拆成 \ll corner —— 不报错，但符号画错，比渲染失败更难发现。
+ * 同理，\neq / \inf / \sinh 这些「长得像某命令 + 字母」的合法命令也必须整体保留，
+ * 所以候选命令要先过 KNOWN_COMMAND_SET（含 PREFIX_EXTENDED_COMMANDS）。
+ */
+function fixCommandSpacing(text) {
+  return text.replace(/\\([a-zA-Z]+)/g, (whole, name) => {
+    if (KNOWN_COMMAND_SET.has(whole)) return whole
+    const prefix = KNOWN_COMMANDS.find((command) => name.startsWith(command.slice(1)))
+    if (!prefix) return whole
+    return `${prefix} ${name.slice(prefix.length - 1)}`
+  })
+}
 
 /** 修复单个公式块内容 */
 function fixMathContent(content) {
@@ -127,7 +170,7 @@ function fixMathContent(content) {
   }
   // LaTeX 控制词由连续字母组成：\angleA 会被当成未定义命令 \angleA。
   // 符号替换后若命令紧跟字母，补一个空格（\angle A、\alpha x、\in A）。
-  c = c.replace(COMMAND_SPACE_RE, '$1 ')
+  c = fixCommandSpacing(c)
   return c
 }
 

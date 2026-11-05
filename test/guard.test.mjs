@@ -154,3 +154,88 @@ test('图片 alt 里的数字不会误报丢失', () => {
   })
   assert.equal(r.ok, true)
 })
+
+// —— 以下为真实误报/漏报的回归用例（每条都曾在本机复现过） ——
+
+test('千分位不算改题：1,000 与 1000 等价', () => {
+  for (const html of ['<p>总价 1000 元</p>', '<p>总价 1,000 元</p>']) {
+    const r = guardHtml({ sourceText: '总价 1,000 元', html, field: 'stem' })
+    assert.equal(r.ok, true, `${html} 不应报错：${JSON.stringify(r.errors)}`)
+  }
+})
+
+test('全角数字与半角数字等价', () => {
+  const r = guardHtml({ sourceText: '共１２人', html: '<p>共 12 人</p>', field: 'stem' })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+})
+
+test('科学计数法改写不算新增数字', () => {
+  const r = guardHtml({
+    sourceText: '总价 3.5万',
+    html: '<p>总价 $3.5\\times 10^{4}$</p>',
+    field: 'stem'
+  })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+})
+
+test('重复数字少一次时报 NUMBER_COUNT_DROPPED 警告（不是硬错误）', () => {
+  const r = guardHtml({ sourceText: '2 和 2', html: '<p>2</p>', field: 'stem' })
+  assert.equal(r.ok, true)
+  assert.ok(r.warnings.some((w) => w.code === 'NUMBER_COUNT_DROPPED'))
+})
+
+test('题号被吞时报 NUMBER_COUNT_DROPPED', () => {
+  const r = guardHtml({ sourceText: '1. 求f(1)', html: '<p>求$f(1)$</p>', field: 'stem' })
+  assert.ok(r.warnings.some((w) => w.code === 'NUMBER_COUNT_DROPPED'))
+})
+
+test('数字出现次数一致时不产生警告', () => {
+  const r = guardHtml({ sourceText: '2 和 2', html: '<p>2 和 2</p>', field: 'stem' })
+  assert.deepEqual(r.warnings, [])
+})
+
+test('选项字母超过 H 也不漏（I、J）', () => {
+  const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']
+  const r = guardHtml({
+    sourceText: letters.map((l, i) => `${l}.${i + 1}`).join(' '),
+    html: letters.map((l, i) => `<p>${l}. ${i + 1}</p>`).join(''),
+    field: 'stem'
+  })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+})
+
+test('全角句点的选项能识别', () => {
+  const r = guardHtml({
+    sourceText: 'A．1 B．3 C．5 D．7',
+    html: '<p>A. 1</p><p>B. 3</p><p>C. 5</p><p>D. 7</p>',
+    field: 'stem'
+  })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+})
+
+test('guard 结果带 warnings 字段（结构稳定）', () => {
+  const r = guardHtml({ sourceText: '已知 x。', html: '<p>已知 $x$。</p>', field: 'stem' })
+  assert.ok(Array.isArray(r.warnings))
+  assert.deepEqual(r.warnings, [])
+})
+
+test('区间/坐标里的逗号是分隔符，不是千分位', () => {
+  // 回归：把 [1,200] 当千分位读成 1200，模型在逗号后加空格（[1, 200]）就会误判成改数
+  const pairs = [
+    ['区间 x∈[1,200] 上单调', '<p>区间 $x\in[1, 200]$ 上单调</p>'],
+    ['区间 x∈[1,200] 上单调', '<p>区间 $x\in[1,200]$ 上单调</p>'],
+    ['点A(1,200)', '<p>点 $A(1, 200)$</p>'],
+    ['集合{1,200}', '<p>集合 $\{1, 200\}$</p>']
+  ]
+  for (const [sourceText, html] of pairs) {
+    const r = guardHtml({ sourceText, html, field: 'stem' })
+    assert.deepEqual(r.errors, [], `${sourceText} → ${html} 误报`)
+  }
+})
+
+test('真千分位仍然按同一个数比对', () => {
+  const a = guardHtml({ sourceText: '标价1,200元', html: '<p>标价 1200 元</p>', field: 'stem' })
+  assert.deepEqual(a.errors, [])
+  const b = guardHtml({ sourceText: '标价1,200元', html: '<p>标价 1,200 元</p>', field: 'stem' })
+  assert.deepEqual(b.errors, [])
+})

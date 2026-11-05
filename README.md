@@ -97,11 +97,14 @@ node bin/qformat.mjs guard 整理后.html --source-text '已知f(x)=x²，求f(2
 
 `guard` 会顺带清洗围栏/前后语、删掉补写的答案、归一公式，然后检查：
 
-- 数字守恒（`ADDED_NUMBER` / `LOST_NUMBER`）
+- 数字守恒（`errors`: `ADDED_NUMBER` / `LOST_NUMBER`；`warnings`: `NUMBER_COUNT_DROPPED` / `NUMBER_COUNT_ADDED`）
 - 选项守恒（`ADDED_OPTION`）
 - 标签外裸文本（`TEXT_OUTSIDE_TAGS`）
 - 裸 `$`、残留 Unicode 数学符号
 - `script` / `on*` / `javascript:` / 内联 `style`
+
+`errors` 让退出码变成 1；`warnings` 只打到 stderr，不阻断流水线——它是「同一数字出现次数变了，
+可能题号被吞」的提示，需要人看一眼再决定。
 
 有不可修复问题时退出码 1。它适合 Agent 直接排版（不花 API 费用）之后跑一遍。
 `--source` 必须是这段输出对应的完整原文（题干 + 选项）；如果选项/数字来自另一个字段，
@@ -180,8 +183,11 @@ const safe = sanitizeHtml(html)
 - **`repair` 只处理已包裹的公式**。正文里裸露的 `x²≥0` 不会被自动加定界符：
   「哪一段算公式」需要语义理解，规则做不到，硬猜会切碎题干。这条已写进
   `references/format-spec.md` 的已知边界。
-- **数字与选项也要守恒**。`guard` 对比原文和输出的数字集合、选项字母；改数字、漏抄条件、
-  凭空补选项、丢掉选项都会报错。它不判断语义是否正确，只守住「排版不是改题」这条线。
+- **数字与选项也要守恒**。`guard` 对比原文和输出的数字出现次数、选项字母；改数字、漏抄条件、
+  凭空补选项、丢掉选项都会报 `errors`（退出码 1）。次数不一致但数值没变（最常见的是题号被吞）
+  报 `warnings`，不改退出码——它需要人判断是不是排版事故。等价写法（`1,000`/`1000`、
+  `１２`/`12`、`3.5万`/`3.5\times 10^{4}`）按同一个数比对，不算改题。
+  它不判断语义是否正确，只守住「排版不是改题」这条线。
 - **字段身份也告诉模型**。基础提示词之外，`buildSystemPrompt(field)` 会追加「本次是题干/答案」，
   减少模型在题干里补答案；后处理截断仍是最后一道确定性防线。
 - **缓存键覆盖提示词**。缓存包含文本、字段、模型、温度、maxTokens 和系统提示词哈希；
@@ -200,14 +206,19 @@ const safe = sanitizeHtml(html)
 ## 测试
 
 ```bash
-npm test     # node --test，89 条用例，零网络依赖
+npm test                              # node --test，113 条用例，零网络依赖
+npm run test:inprocess                # 同一套用例在进程内跑（沙箱禁止 spawn 时用）
 ```
 
 覆盖：围栏/外壳清洗、定界符归一、Unicode 转 LaTeX 与命令边界、含 `<` 的不等式、
 防泄题的多种边界（故答案为 / 正确答案 / 故选 / 无冒号 / 逗号后 / 解析式误判）、
-数字与选项守恒（含丢失选项）、HTML 消毒、缓存键与读写、字段提示、CLI 的
+数字与选项守恒（含丢失选项、千分位与全角数字等价、题号被吞）、HTML 消毒、缓存键与读写、
+字段提示、金样本（真实题库形态的原文→HTML 成对用例），以及 CLI 的
 repair / guard / sanitize / 批量缓存 / 断点续跑冒烟。CI 见 `.github/workflows/ci.yml`
-（Node 18/20/22 × Ubuntu/Windows）。
+（Node 18/20/22/24 × Ubuntu/Windows）。
+
+`test/cli.test.mjs` 会先探测能否 `spawn` 子进程：在禁止 spawn 的沙箱里整组标记为 skipped
+而不是失败——那是环境限制，不是代码缺陷。
 
 ## 安全边界
 
@@ -218,8 +229,9 @@ repair / guard / sanitize / 批量缓存 / 断点续跑冒烟。CI 见 `.github/
 ## 目录结构
 
 ```
-SKILL.md                    Agent 读的入口：路径选择、规则、自检清单、失败处理
+SKILL.md                    Agent 读的入口：解决什么、走哪条路、排版规则、自检清单
 references/
+  usage.md                  命令详解、失败码与提示码、交付话术
   prompt.md                 系统提示词（唯一事实来源）
   format-spec.md            输出契约 + LaTeX 对照表 + 示例 + 已知边界
   answer-leak.md            防泄题的设计说明
@@ -236,7 +248,7 @@ src/
   prompt.mjs               提示词加载 + 字段规则
   env.mjs                   极简 .env 读取
 bin/qformat.mjs             CLI
-test/                       89 条用例（含 CLI 与批量缓存/续跑冒烟）
+test/                       113 条用例（含金样本、CLI 与批量缓存/续跑冒烟）
 ```
 
 ## License
