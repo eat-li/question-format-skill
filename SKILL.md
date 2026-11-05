@@ -26,6 +26,9 @@ description: 把 Word、聊天记录、截图 OCR 里粘来的数学题目整理
 
 单道题直接排版比调 CLI 快得多，不要为了用上工具而绕路。命令细节、失败码表、交付话术见 `references/usage.md`。
 
+在 DeepSeek Harness 里装了本插件（`question-format-skill`）时，四个离线能力都是原生工具，不必走 shell：
+`question_format_guard`（守门，最常用）、`question_format_repair`（修公式）、`question_format_sanitize`（消毒）。
+
 ## 排版规则（路径 A 必读）
 
 事实来源是 `references/prompt.md`，字段规则由 `buildSystemPrompt(field)` 追加。
@@ -68,6 +71,9 @@ description: 把 Word、聊天记录、截图 OCR 里粘来的数学题目整理
 ```bash
 node bin/qformat.mjs guard 输出.html --source 原文.txt --field stem
 ```
+
+在 DeepSeek Harness 里装了本插件时，等价于调用 `question_format_guard` 工具
+（参数 `html` + `sourceText` + `field`），不必走 shell。
 
 它会清洗围栏、删掉补写的答案解析、归一公式、校验数字与选项守恒，并报告
 `ADDED_NUMBER` / `LOST_NUMBER` / `ADDED_OPTION` / `LOST_OPTION` / `TEXT_OUTSIDE_TAGS` /

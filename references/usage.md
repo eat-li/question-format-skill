@@ -15,6 +15,23 @@ SKILL.md 只放「必须每次都看到」的规则；命令细节、失败码�
 
 不要为了「用上工具」而绕路：单道题直接排版比调 CLI 快得多。批处理才用 CLI——它省钱、逐项隔离失败、结果可回填。
 
+## 在 DeepSeek Harness 里（插件形态）
+
+装了 `question-format-skill` 插件后，上表里除「批量」与「verify」外的能力都是原生工具，
+直接把 HTML 传给工具即可，不需要 shell、不需要工作目录里有这个仓库：
+
+| 工具 | 等价命令 | 用途 |
+| --- | --- | --- |
+| `question_format_guard` | `qformat guard <文件> --source <原文>` | 守门：防泄题 + 公式归一 + 数字/选项守恒 + 危险标签 |
+| `question_format_repair` | `qformat repair <文件>` | 只修公式写法，不动题目文字 |
+| `question_format_sanitize` | `qformat sanitize <文件>` | 白名单消毒 |
+
+`question_format_guard` 的参数是 `html`（待检查的 HTML）、`sourceText`（原文，给了才做守恒与防泄题）、
+`field`（`auto`/`stem`/`body`/`answer`）、`sanitize`（是否顺手消毒）。返回 `ok` 与 `errors`/`warnings`
+两栏：`errors` 非空不能交付，`warnings` 只是提示（例如题号被吞）。
+
+**注意**：插件只装了离线三件套。要批量跑题或做 KaTeX 渲染校验，仍需在本仓库里用 CLI。
+
 ## 字段身份（field）
 
 | field | 含义 | 行为 |

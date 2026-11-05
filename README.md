@@ -2,7 +2,7 @@
 
 把「从 Word、聊天记录、OCR 里粘来的」数学题目文本，整理成结构规范、公式能渲染的 HTML 富文本。
 
-它是一个 **Agent Skill**（给 Claude Code / WorkBuddy 等编码 Agent 用的技能包），也可以**当命令行工具单独用**。
+它是一个 **Agent Skill**（给 Claude Code / WorkBuddy 等编码 Agent 用的技能包），也是一个 **DeepSeek Harness 插件**，还可以**当命令行工具单独用**。
 
 ```
 输入   已知f(x)=x²-2x+3，求f(2)的值。A.1 B.3 C.5 D.7
@@ -38,7 +38,38 @@ npm install        # 只为 verify 命令装 katex；不用 verify 可跳过
 要求 Node.js ≥ 18.13（依赖内置 `fetch`）。运行时**零第三方依赖**。
 `.env` 放在当前工作目录或 skill 根目录都可以；CLI 先读 cwd，再读 skill 根目录，不覆盖已有环境变量。
 
-## 五种用法
+## 六种用法
+
+### 0. 作为 DeepSeek Harness 插件
+
+仓库本身就是 dsh bundle 插件包（`dsh.bundle.patch` → `cordis.patch.yml`），装进 dsh profile 后会提供：
+
+| 能力 | 触发语 | 是否联网 |
+| --- | --- | --- |
+| 技能 `question-format` | 「整理题目格式」「把公式改成能渲染的写法」 | 否 |
+| 工具 `question_format_guard` | 「检查排版有没有改坏」「交付前自检」「别泄题」 | 否 |
+| 工具 `question_format_repair` | 「公式渲染不出来」「KaTeX 报错」 | 否 |
+| 工具 `question_format_sanitize` | 「去掉富文本垃圾标签」「能直接落库吗」 | 否 |
+
+安装（DSH Desktop 里用 **Settings → Plugins** 装；命令行则要两步）：
+
+```bash
+# ① 把包放进 profile 的 node_modules
+dsh plugin --profile desktop add file:/绝对路径/question-format-skill
+# ② 把包名加进该 profile 的 dsh.profile.bundles
+node -e "const f='C:/Users/你/.dsh/profiles/desktop/package.json',j=require(f);j.dsh.profile.bundles.includes('question-format-skill')||j.dsh.profile.bundles.push('question-format-skill');require('fs').writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+```
+
+`dsh plugin add` 只负责装依赖，**不会**把包名写进 `dsh.profile.bundles`；漏了第二步 dsh 启动时不会加载它的 bundle patch，插件静默不生效。
+
+本地开发可以用 overlay 不动 profile：
+
+```bash
+dsh --profile <你的 profile> --patch ./dev-overlay.yml   # 见下
+```
+
+插件层是纯 Node 的（`lib/host.mjs` 不 import 任何 `@deepseek-ai/*`），所以不需要双端构建，也不受宿主版本兼容检查影响。
+技能正文直接读包内 `SKILL.md`，`resourceBase` 指向包根，因此 `references/*.md` 的相对路径能被模型解析。
 
 ### 1. 作为 Agent Skill
 
@@ -206,14 +237,15 @@ const safe = sanitizeHtml(html)
 ## 测试
 
 ```bash
-npm test                              # node --test，113 条用例，零网络依赖
+npm test                              # node --test，124 条用例，零网络依赖
 npm run test:inprocess                # 同一套用例在进程内跑（沙箱禁止 spawn 时用）
 ```
 
 覆盖：围栏/外壳清洗、定界符归一、Unicode 转 LaTeX 与命令边界、含 `<` 的不等式、
 防泄题的多种边界（故答案为 / 正确答案 / 故选 / 无冒号 / 逗号后 / 解析式误判）、
 数字与选项守恒（含丢失选项、千分位与全角数字等价、题号被吞）、HTML 消毒、缓存键与读写、
-字段提示、金样本（真实题库形态的原文→HTML 成对用例），以及 CLI 的
+字段提示、金样本（真实题库形态的原文→HTML 成对用例）、dsh 插件宿主（工具注册形状、
+技能 provider 契约、单个服务缺失时的降级），以及 CLI 的
 repair / guard / sanitize / 批量缓存 / 断点续跑冒烟。CI 见 `.github/workflows/ci.yml`
 （Node 18/20/22/24 × Ubuntu/Windows）。
 
@@ -248,7 +280,9 @@ src/
   prompt.mjs               提示词加载 + 字段规则
   env.mjs                   极简 .env 读取
 bin/qformat.mjs             CLI
-test/                       113 条用例（含金样本、CLI 与批量缓存/续跑冒烟）
+lib/host.mjs                dsh 插件宿主：注册三个离线工具 + question-format 技能
+cordis.patch.yml            dsh bundle patch（把本包插进 profile 层栈）
+test/                       124 条用例（含金样本、插件宿主、CLI 与批量缓存/续跑冒烟）
 ```
 
 ## License

@@ -27,6 +27,25 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Plugin smoke test
+        shell: bash
+        run: |
+          node -e "import('./lib/host.mjs').then(m => {
+            if (m.name !== 'question-format') throw new Error('bad plugin name');
+            if (!Array.isArray(m.inject) || !m.inject.includes('tools')) throw new Error('bad inject');
+            const tools = [];
+            m.apply({
+              logger: { warn: (x) => console.error(x) },
+              tools: { register: (t) => { tools.push(t); return () => {} } },
+              skills: { registerProvider: () => () => {} }
+            });
+            const names = tools.map(t => t.name).join(',');
+            if (names !== 'question_format_guard,question_format_repair,question_format_sanitize') {
+              throw new Error('unexpected tools: ' + names);
+            }
+            console.log('plugin ok:', names);
+          })"
+
       - name: CLI smoke test
         shell: bash
         run: |

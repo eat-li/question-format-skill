@@ -1,0 +1,9 @@
+# 本地开发用的 dsh overlay：把工作区里的这份代码挂进 profile，不改 profile 自身。
+#
+#   dsh --profile <你的 profile> --patch ./dev-overlay.yml
+#
+# 注意：DSH Desktop 管理的 profile（desktop）不允许命令行加载，
+# 本地验证请用 web / tui / headless 等非托管 profile。
+- insert:
+    - id: question-format-dev
+      name: ./lib/host.mjs

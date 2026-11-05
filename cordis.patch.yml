@@ -1,0 +1,5 @@
+# dsh bundle patch：把 question-format 插件插进 profile 的层栈。
+# id 避开官方核心 row（tools / session / llm / web / permission）。
+- insert:
+    - id: question-format
+      name: 'question-format-skill'

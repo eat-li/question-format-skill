@@ -1,6 +1,6 @@
 {
   "name": "question-format-skill",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "把题目文本整理成规范 HTML 的 Agent Skill：KaTeX 公式归一、防泄题兜底、数字/选项守恒守卫、HTML 消毒",
   "type": "module",
   "license": "MIT",
@@ -19,8 +19,14 @@
   "bin": {
     "qformat": "bin/qformat.mjs"
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "exports": {
     ".": "./src/index.mjs",
+    "./plugin": "./lib/host.mjs",
     "./clean": "./src/clean.mjs",
     "./strip-answer": "./src/strip-answer.mjs",
     "./normalize-math": "./src/normalize-math.mjs",
@@ -35,9 +41,11 @@
   "files": [
     "bin",
     "src",
+    "lib",
     "references",
     "SKILL.md",
-    "README.md"
+    "README.md",
+    "cordis.patch.yml"
   ],
   "scripts": {
     "test": "node --test",
